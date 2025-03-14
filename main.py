@@ -10,11 +10,11 @@ app = FastAPI()
 # Connect to PostgreSQL
 def get_db_connection():
     conn = psycopg2.connect(
-        dbname="airquality",  # your database name
-        user="postgres",  # your PostgreSQL username
-        password="***",  # your password
-        host="localhost",  # server IP or 'localhost' if running on the same machine
-        port="5432"  # PostgreSQL default port
+        dbname="airquality",
+        user="postgres",
+        password="bagels",
+        host="localhost",  
+        port="5432"  
     )
     return conn
 
@@ -29,7 +29,7 @@ class AirQualityReading(BaseModel):
     so2: float
     co: float
 
-# POST /readings - Add new reading
+# POST
 @app.post("/readings/")
 async def create_reading(reading: AirQualityReading):
     conn = get_db_connection()
@@ -51,7 +51,7 @@ async def create_reading(reading: AirQualityReading):
         cursor.close()
         conn.close()
 
-# GET /readings/{reading_id} - Get a specific reading by ID
+# GET
 @app.get("/readings/{reading_id}")
 async def get_reading(reading_id: int):
     conn = get_db_connection()
@@ -80,7 +80,7 @@ async def get_reading(reading_id: int):
         "co": reading[7],
     }
 
-# PUT /readings/{reading_id} - Update a reading by ID
+# PUT
 @app.put("/readings/{reading_id}")
 async def update_reading(reading_id: int, reading: AirQualityReading):
     conn = get_db_connection()
@@ -88,7 +88,8 @@ async def update_reading(reading_id: int, reading: AirQualityReading):
 
     try:
         cursor.execute("""
-            UPDATE air_quality_readings SET temperature = %s, humidity = %s, pm25 = %s, pm10 = %s, no2 = %s, so2 = %s, co = %s, 
+            UPDATE air_quality_readings 
+            SET temperature = %s, humidity = %s, pm25 = %s, pm10 = %s, no2 = %s, so2 = %s, co = %s
             WHERE reading_id = %s;
         """, (reading.temperature, reading.humidity, reading.pm25, reading.pm10, reading.no2, reading.so2, reading.co, 
               reading_id))
@@ -100,12 +101,12 @@ async def update_reading(reading_id: int, reading: AirQualityReading):
         return {"message": "Reading updated successfully"}
     except Exception as e:
         conn.rollback()
-        raise HTTPException(status_code=500, detail="Error updating reading")
+        raise HTTPException(status_code=500, detail=f"Error updating reading: {str(e)}")
     finally:
         cursor.close()
         conn.close()
 
-# DELETE /readings/{reading_id} - Delete a reading by ID
+# DELETE
 @app.delete("/readings/{reading_id}")
 async def delete_reading(reading_id: int):
     conn = get_db_connection()
