@@ -1,24 +1,29 @@
 from fastapi import FastAPI, HTTPException
+from motor.motor_asyncio import AsyncIOMotorClient
 from pydantic import BaseModel
-from typing import Optional
-import psycopg2
-from psycopg2 import sql
+from datetime import datetime, timezone
+from typing import List, Optional
 
-# FastAPI app instance
+# FastAPI App
 app = FastAPI()
 
-# Connect to PostgreSQL
-def get_db_connection():
-    conn = psycopg2.connect(
-        dbname="airquality",
-        user="postgres",
-        password="bagels",
-        host="localhost",  
-        port="5432"  
-    )
-    return conn
+# MongoDB Connection
+MONGO_URI = "mongodb+srv://jkiguta:vMve9B2a2oUKPVw0@cluster0.zh7yx.mongodb.net/?retryWrites=true&w=majority&appName=Cluster0"
+client = AsyncIOMotorClient(MONGO_URI)
+db = client["air_quality_db"]
 
-# Pydantic model for Air Quality Readings
+# Collections
+air_quality_readings = db["air_quality_readings"]
+air_quality_levels = db["air_quality_levels"]
+locations = db["locations"]
+air_quality_log = db["air_quality_log"]
+
+# Pydantic Models for Validation
+class Locations(BaseModel):
+    location_id: int
+    population_density: int
+    industrial_proximity_km: float
+
 class AirQualityReading(BaseModel):
     reading_id: Optional[int] = None
     temperature: float
@@ -28,103 +33,94 @@ class AirQualityReading(BaseModel):
     no2: float
     so2: float
     co: float
+    location_id: Optional[int] = None
 
-# POST
-@app.post("/readings/")
-async def create_reading(reading: AirQualityReading):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+class AirQualityLog(BaseModel):
+    location_id: int
+    old_quality: str
+    new_quality: str
+    change_time: datetime
+
+class AirQualityLevel(BaseModel):
+    level_id: int
+    quality_level: str
+
+
+# **1. CREATE - Add New Air Quality Reading**
+@app.post("/add_reading/")
+async def add_air_quality_reading(data: AirQualityReading):
+    result = await air_quality_readings.insert_one(data.dict())
+    return {"message": "Reading added", "id": str(result.inserted_id)}
+
+
+# **2. READ - Get All Air Quality Readings**
+@app.get("/readings/", response_model=List[AirQualityReading])
+async def get_all_readings():
+    readings = await air_quality_readings.find({}, {"_id": 0}).to_list(length=100)  # Limit to 100 rows
+    return readings
+
+
+# **3. READ - Get Readings by Quality Level**
+@app.get("/readings/{level}/", response_model=List[AirQualityReading])
+async def get_air_quality_by_level(level: str):
+    # Find all level_id(s) corresponding to the given quality level
+    level_docs = await air_quality_levels.find({"quality_level": level}).to_list(None)
     
-    try:
-        cursor.execute("""
-            INSERT INTO air_quality_readings (temperature, humidity, pm25, pm10, no2, so2, co)
-            VALUES (%s, %s, %s, %s, %s, %s, %s)
-            RETURNING reading_id;
-        """, (reading.temperature, reading.humidity, reading.pm25, reading.pm10, reading.no2, reading.so2, reading.co))
-        reading_id = cursor.fetchone()[0]
-        conn.commit()
-        return {"reading_id": reading_id}
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail="Error creating reading")
-    finally:
-        cursor.close()
-        conn.close()
+    if not level_docs:
+        raise HTTPException(status_code=404, detail="Quality level not found.")
 
-# GET
-@app.get("/readings/{reading_id}")
-async def get_reading(reading_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
-    
-    cursor.execute("""
-        SELECT * FROM air_quality_readings WHERE reading_id = %s;
-    """, (reading_id,))
-    reading = cursor.fetchone()
+    # Extract all level_id values
+    level_ids = [doc["level_id"] for doc in level_docs]
 
-    if reading is None:
-        raise HTTPException(status_code=404, detail="Reading not found")
-    
-    conn.commit()
-    cursor.close()
-    conn.close()
+    # Find air quality readings where reading_id matches any of the level_id(s)
+    readings = await air_quality_readings.find({"reading_id": {"$in": level_ids}}, {"_id": 0}).to_list(None)
 
-    return {
-        "reading_id": reading[0],
-        "temperature": reading[1],
-        "humidity": reading[2],
-        "pm25": reading[3],
-        "pm10": reading[4],
-        "no2": reading[5],
-        "so2": reading[6],
-        "co": reading[7],
+    if not readings:
+        raise HTTPException(status_code=404, detail="No readings found for this quality level.")
+
+    return readings
+
+
+# **4. UPDATE - Update Air Quality Level & Log Changes**
+@app.put("/update_quality/{reading_id}/")
+async def update_air_quality_level(reading_id: int, new_level: str):
+    old_doc = await air_quality_readings.find_one({"reading_id": reading_id})
+    if not old_doc:
+        raise HTTPException(status_code=404, detail="No record found.")
+
+    old_level = old_doc.get("quality_level", "Unknown")  # Handle missing quality_level field
+
+    # Log the change
+    log_entry = {
+        "reading_id": reading_id,
+        "old_quality": old_level,
+        "new_quality": new_level,
+        "change_time": datetime.now(timezone.utc),
     }
+    await air_quality_log.insert_one(log_entry)
 
-# PUT
-@app.put("/readings/{reading_id}")
-async def update_reading(reading_id: int, reading: AirQualityReading):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    # Update the reading
+    result = await air_quality_readings.update_one(
+        {"reading_id": reading_id},
+        {"$set": {"quality_level": new_level}},
+    )
 
-    try:
-        cursor.execute("""
-            UPDATE air_quality_readings 
-            SET temperature = %s, humidity = %s, pm25 = %s, pm10 = %s, no2 = %s, so2 = %s, co = %s
-            WHERE reading_id = %s;
-        """, (reading.temperature, reading.humidity, reading.pm25, reading.pm10, reading.no2, reading.so2, reading.co, 
-              reading_id))
-        conn.commit()
-        
-        if cursor.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Reading not found")
-        
-        return {"message": "Reading updated successfully"}
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail=f"Error updating reading: {str(e)}")
-    finally:
-        cursor.close()
-        conn.close()
+    if result.modified_count == 0:
+        raise HTTPException(status_code=500, detail="Update failed.")
 
-# DELETE
-@app.delete("/readings/{reading_id}")
-async def delete_reading(reading_id: int):
-    conn = get_db_connection()
-    cursor = conn.cursor()
+    return {"message": "Quality level updated and logged."}
 
-    try:
-        cursor.execute("""
-            DELETE FROM air_quality_readings WHERE reading_id = %s;
-        """, (reading_id,))
-        conn.commit()
-        
-        if cursor.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Reading not found")
-        
-        return {"message": "Reading deleted successfully"}
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=500, detail="Error deleting reading")
-    finally:
-        cursor.close()
-        conn.close()
+
+# **5. DELETE - Remove a Reading**
+@app.delete("/delete/{reading_id}/")
+async def delete_air_quality_reading(reading_id: int):
+    result = await air_quality_readings.delete_one({"reading_id": reading_id})
+    if result.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="No record found.")
+    return {"message": "Deleted successfully."}
+
+
+# **Run Locally with Uvicorn**
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
