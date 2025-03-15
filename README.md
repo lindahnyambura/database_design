@@ -44,8 +44,8 @@
 - Handles CRUD operations for air quality data and predictions.
 
 ### 3. Machine Learning Model
-- **CNN Model**: Predicts air quality parameters based on historical data.
-- Saved as `nn_model_rmsprop.keras` in the project.
+- **SVM Model**: Predicts air quality parameters based on historical data.
+- Saved as `svm_model.pkl` in the project.
 
 ## Installation Requirements
 
