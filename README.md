@@ -39,6 +39,10 @@
 - **PostgreSQL**: Stores structured air quality readings, station information, and prediction logs.
 - **MongoDB**: Stores prediction results and model performance metrics in a flexible document format.
 
+Below is the schema diagram for the database:
+![schema diagram](https://github.com/user-attachments/assets/fd8b3b77-90b5-4915-afe6-5fee19867069)
+
+
 ### 2. API Layer
 - **FastAPI**: Provides RESTful endpoints for data retrieval and submission.
 - Handles CRUD operations for air quality data and predictions.
